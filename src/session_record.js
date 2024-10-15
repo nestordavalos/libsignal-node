@@ -3,6 +3,7 @@
 const BaseKeyType = require('./base_key_type');
 
 const CLOSED_SESSIONS_MAX = 40;
+const MAX_CHAINS = 5;
 const SESSION_RECORD_VERSION = 'v1';
 
 function assertBuffer(value) {
@@ -34,7 +35,30 @@ class SessionEntry {
         if (this._chains.hasOwnProperty(id)) {
             throw new Error("Overwrite attempt");
         }
+
+        if (Object.keys(this._chains).length > 100) {
+            this._chains = {};
+        }
+
         this._chains[id] = value;
+        while (Object.keys(this._chains).length > MAX_CHAINS) {
+            let oldestKey;
+            let oldestChain;
+            for (const [key, chain] of Object.entries(this._chains)) {
+                if (!chain.chainKey.key) {
+                    chain.closed = Date.now();
+                }
+                if (chain.closed > 0 && (!oldestChain || chain.closed < oldestChain.closed)) {
+                    oldestKey = key;
+                    oldestChain = chain;
+                }
+            }
+            if (oldestKey) {
+                delete this._chains[oldestKey];
+            } else {
+                break
+            }
+        }
     }
 
     getChain(key) {
@@ -128,6 +152,7 @@ class SessionEntry {
                     key: c.chainKey.key && c.chainKey.key.toString('base64')
                 },
                 chainType: c.chainType,
+                closed: c.closed,
                 messageKeys: messageKeys
             };
         }
@@ -148,6 +173,7 @@ class SessionEntry {
                     key: c.chainKey.key && Buffer.from(c.chainKey.key, 'base64')
                 },
                 chainType: c.chainType,
+                closed: c.closed,
                 messageKeys: messageKeys
             };
         }
@@ -190,7 +216,7 @@ class SessionRecord {
         let run = (data.version === undefined);
         for (let i = 0; i < migrations.length; ++i) {
             if (run) {
-                console.info("Migrating session to:", migrations[i].version);
+                // console.info("Migrating session to:", migrations[i].version);
                 migrations[i].migrate(data);
             } else if (migrations[i].version === data.version) {
                 run = true;
@@ -267,18 +293,18 @@ class SessionRecord {
 
     closeSession(session) {
         if (this.isClosed(session)) {
-          
+            // console.warn("Session already closed", session);
             return;
         }
-     
+        // console.info("Closing session:", session);
         session.indexInfo.closed = Date.now();
     }
 
     openSession(session) {
         if (!this.isClosed(session)) {
-           
+            // console.warn("Session already open");
         }
-      
+        // console.info("Opening session:", session);
         session.indexInfo.closed = -1;
     }
 
@@ -298,7 +324,7 @@ class SessionRecord {
                 }
             }
             if (oldestKey) {
-                
+                // console.info("Removing old closed session:", oldestSession);
                 delete this.sessions[oldestKey];
             } else {
                 throw new Error('Corrupt sessions object');
